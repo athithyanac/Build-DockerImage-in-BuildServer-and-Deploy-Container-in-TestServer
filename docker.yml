@@ -1,0 +1,123 @@
+---
+- name: " Docker clone and image push"
+  become: true
+  hosts: build
+  vars:
+    packages:
+      - git
+      - docker
+      - python3-pip
+    repo_url: "https://github.com/athithyanac/FlaskApp-Image.git"
+    user: "ec2-user"
+    image_name: "athithyanac/pyapp"
+  vars_files:
+    - dockerhub_creds.yml
+  tasks:
+    - name: "Install and git and docker"
+      dnf: 
+        name: "{{packages}}"
+        state: present
+    - name: "Install docker client for python docker-py"
+      pip:
+        name: docker-py
+        state: present
+    - name: "Start and enable docker Service"
+      service:
+        name: docker
+        state: started
+        enabled: true
+    - name: "Adding user to docker group"
+      user:
+        name: "{{user}}"
+        append: true
+        groups: docker
+    - name: "Cloning Repo"
+      git:
+        repo: "{{repo_url}}"
+        dest: /home/ec2-user/docker/
+      register: git_status
+    - name: "Dockerhub login"
+      when: git_status.changed
+      docker_login:
+        username: "{{username}}"
+        password: "{{pwd}}"
+        state: present
+    - name: "Building and Pushing Docker Image to Dockerhub"
+      when: git_status.changed
+      docker_image:
+        build:
+          path: /home/ec2-user/docker/
+        source: build
+        state: present
+        push: true
+        name: "{{image_name}}"
+        tag: "{{item}}"
+      with_items:
+        - latest
+        - "{{git_status.after}}"
+    - name: "Dockerhub logout"
+      docker_login:
+        state: absent
+    - name: "Image Cleanup"
+      docker_image:
+        state: absent
+        name: "{{image_name}}"
+        tag: "{{item}}"
+      with_items:
+        - latest
+        - "{{git_status.after}}"
+
+- name: "Deploying Docker Image"
+  hosts: test
+  become: true
+  vars:
+    packages:
+      - git
+      - docker
+      - python3-pip
+    repo_url: "https://github.com/athithyanac/FlaskApp-Image.git"
+    user: "ec2-user"
+    image_name: "athithyanac/pyapp"
+    container_name: "flaskapp"
+    host_port: 8080
+    container_port: 5000
+  vars_files:
+    - dockerhub_creds.yml
+  tasks:
+    - name: "Install and git and docker"
+      dnf: 
+        name: "{{packages}}"
+        state: present
+    - name: "Install docker client for python docker-py"
+      pip:
+        name: docker-py
+        state: present
+    - name: "Start and enable docker Service"
+      service:
+        name: docker
+        state: started
+        enabled: true
+    - name: "Adding user to docker group"
+      user:
+        name: "{{user}}"
+        append: true
+        groups: docker
+    - name: "Git register"
+      git:
+        repo: "{{repo_url}}"
+        clone: false
+      register: git_status
+    - name: "Pulling Image from Dockerhub"
+      docker_image:
+        name: "{{image_name}}"
+        source: pull
+    - name: "Deploying Container From Pulled Image"
+      when: git_status.changed
+      docker_container:
+        name: "{{container_name}}"
+        image: "{{image_name}}"
+        state: started
+        recreate: true
+        ports:
+          - "{{host_port}}:{{container_port}}"
+  
